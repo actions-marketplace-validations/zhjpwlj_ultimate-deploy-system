@@ -1,6 +1,10 @@
 name: 🚀 FocusFlow Ultra Deploy
 description: CI/CD for TypeScript projects with bundle guard, Lighthouse audits, and deployment to Netlify or GitHub Pages.
 
+branding:
+  icon: 'zap'      # 稲妻アイコン
+  color: 'green'    # 緑色の背景
+
 on:
   workflow_dispatch:
     inputs:
