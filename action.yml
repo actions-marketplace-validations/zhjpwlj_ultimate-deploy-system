@@ -1,52 +1,58 @@
 name: 🚀 Super Ultra Typescript Deploy
-description: CI/CD for TypeScript projects with bundle guard, Lighthouse audits, and deployment to Netlify or GitHub Pages.
+description: The Ultimate TypeScript CI/CD Pipeline
 
 branding:
-  icon: 'zap'     
-  color: 'green'   
+  icon: zap
+  color: green
+
+
 
 on:
-  workflow_call:
-     inputs:
+
+  workflow_dispatch:
+    inputs:
       target:
         description: Deploy target
         type: choice
-        options: [both, github-pages, netlify]
-        default: github-pages
+        options:
+          - both
+          - github-pages
+          - netlify
+        default: both
+
       mode:
         description: Deployment mode
         type: choice
-        options: [preview, production]
+        options:
+          - preview
+          - production
         default: production
-      bundle_limit_kb:
-        description: Bundle size limit (KB)
-        type: number
-        default: 5000
-      lighthouse_threshold:
-        description: Lighthouse performance threshold
-        type: number
-        default: 80
 
-        
+  pull_request:
+  push:
+    branches: [main]
+
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
   pull-requests: write
 
-concurrency:
-  group: ultra-deploy-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   NODE_VERSION: 20
   DIST_DIR: dist
+  BUNDLE_LIMIT_KB: 5000
 
-# ===============================
-# 1️⃣ BUILD ONCE
-# ===============================
+concurrency:
+  group: super-ultra-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+
+# =========================
+# BUILD + STRICT CHECK
+# =========================
+
   build:
     runs-on: ubuntu-latest
 
@@ -58,200 +64,247 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
 
-      - name: Type check (strict)
-        run: npm run typecheck || npx tsc --noEmit
+      - name: TypeScript strict check
+        run: npx tsc --noEmit --strict
 
-      - name: Lint (strict)
-        run: npm run lint
+      - name: ESLint strict
+        run: npx eslint . --max-warnings=0
 
       - name: Build
         run: npm run build
 
-      - name: Verify dist exists
+      - name: Verify dist
         run: |
           if [ ! -d "${{ env.DIST_DIR }}" ]; then
-            echo "Build failed: dist not found"
+            echo "dist not found"
             exit 1
           fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: site-build
-          path: ${{ env.DIST_DIR }}
-          retention-days: 1
+          name: build
+          path: dist
 
-# ===============================
-# 2️⃣ BUNDLE GUARD
-# ===============================
+# =========================
+# BUNDLE ANALYSIS
+# =========================
 
-  bundle-guard:
+  bundle-analysis:
     needs: build
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: site-build
-          path: ${{ env.DIST_DIR }}
+          name: build
+          path: dist
 
-      - name: Check bundle size
+      - run: npm install -g source-map-explorer
+
+      - name: Bundle size
         run: |
-          SIZE=$(du -sk ${{ env.DIST_DIR }} | cut -f1)
+          SIZE=$(du -sk dist | cut -f1)
           echo "Bundle size: $SIZE KB"
-          if [ "$SIZE" -gt "${{ inputs.bundle_limit_kb }}" ]; then
-            echo "Bundle exceeds limit."
+
+          if [ "$SIZE" -gt "$BUNDLE_LIMIT_KB" ]; then
+            echo "Bundle too large"
             exit 1
           fi
 
-# ===============================
-# 3️⃣ NETLIFY PREVIEW
-# ===============================
+      - name: File analysis
+        run: |
+          find dist -type f -name "*.js" -exec du -h {} \;
+
+# =========================
+# NETLIFY PREVIEW
+# =========================
 
   netlify-preview:
-    needs: bundle-guard
-    if: ${{ inputs.target == 'both' || inputs.target == 'netlify' }}
+    needs: bundle-analysis
     runs-on: ubuntu-latest
     outputs:
-      preview_url: ${{ steps.deploy.outputs.preview_url }}
+      preview_url: ${{ steps.deploy.outputs.url }}
 
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: site-build
-          path: ${{ env.DIST_DIR }}
+          name: build
+          path: dist
 
       - run: npm install -g netlify-cli
 
-      - name: Deploy preview
-        id: deploy
+      - id: deploy
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
           RESP=$(netlify deploy \
-            --dir=${{ env.DIST_DIR }} \
-            --site=$NETLIFY_SITE_ID \
-            --auth=$NETLIFY_AUTH_TOKEN \
-            --json \
-            --no-build \
-            --message="CI Preview Deploy")
+          --dir=dist \
+          --json \
+          --auth=$NETLIFY_AUTH_TOKEN \
+          --site=$NETLIFY_SITE_ID)
 
-          echo "$RESP"
+          URL=$(echo $RESP | jq -r '.deploy_url')
+          echo "url=$URL" >> $GITHUB_OUTPUT
 
-          URL=$(echo "$RESP" | jq -r '.deploy_url // .url // empty')
-          echo "preview_url=$URL" >> $GITHUB_OUTPUT
-
-      - name: Comment preview on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const url = "${{ steps.deploy.outputs.preview_url }}";
-            if (!url) return;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 Preview Ready:\n${url}`
-            });
-
-# ===============================
-# 4️⃣ LIGHTHOUSE
-# ===============================
-
-  lighthouse:
-    needs: netlify-preview
-    if: ${{ needs.netlify-preview.outputs.preview_url != '' }}
-    runs-on: ubuntu-latest
-
-    steps:
-      - run: npm install -g lighthouse
-
-      - name: Run Lighthouse
-        id: lh
-        run: |
-          URL="${{ needs.netlify-preview.outputs.preview_url }}"
-
-          lighthouse "$URL" \
-            --chrome-flags="--headless" \
-            --output=json \
-            --output-path=report.json \
-            --quiet || exit 1
-
-          SCORE=$(jq '.categories.performance.score * 100 | floor' report.json)
-          echo "score=$SCORE" >> $GITHUB_OUTPUT
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lighthouse-report
-          path: report.json
-
-      - name: Summary
-        run: |
-          echo "## Lighthouse Score: ${{ steps.lh.outputs.score }}" >> $GITHUB_STEP_SUMMARY
-
-      - name: Enforce threshold
-        run: |
-          if [ "${{ steps.lh.outputs.score }}" -lt "${{ inputs.lighthouse_threshold }}" ]; then
-            echo "Lighthouse below threshold"
-            exit 1
-          fi
-
-# ===============================
-# 5️⃣ GITHUB PAGES
-# ===============================
+# =========================
+# GITHUB PAGES DEPLOY
+# =========================
 
   github-pages:
-    needs: bundle-guard
-    if: ${{ inputs.target == 'both' || inputs.target == 'github-pages' }}
+    needs: bundle-analysis
     runs-on: ubuntu-latest
     environment:
       name: github-pages
 
     steps:
+
       - uses: actions/download-artifact@v4
         with:
-          name: site-build
-          path: ${{ env.DIST_DIR }}
+          name: build
+          path: dist
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.DIST_DIR }}
+          path: dist
 
-      - uses: actions/deploy-pages@v4
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
-# ===============================
-# 6️⃣ NETLIFY PRODUCTION
-# ===============================
+# =========================
+# LIGHTHOUSE AUDIT
+# =========================
 
-  netlify-prod:
-    needs: lighthouse
-    if: ${{ inputs.mode == 'production' && (inputs.target == 'both' || inputs.target == 'netlify') }}
+  lighthouse:
+    needs: [netlify-preview, github-pages]
     runs-on: ubuntu-latest
 
     steps:
+
+      - run: npm install -g lighthouse
+
+      - name: Run Lighthouse
+        run: |
+          URL="${{ needs.netlify-preview.outputs.preview_url }}"
+
+          lighthouse $URL \
+            --chrome-flags="--headless" \
+            --output=json \
+            --output-path=report.json
+
+      - name: Extract score
+        id: score
+        run: |
+          SCORE=$(jq '.categories.performance.score*100|floor' report.json)
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse
+          path: report.json
+
+# =========================
+# PERFORMANCE REGRESSION
+# =========================
+
+  regression-check:
+    needs: lighthouse
+    runs-on: ubuntu-latest
+
+    steps:
+
       - uses: actions/download-artifact@v4
         with:
-          name: site-build
-          path: ${{ env.DIST_DIR }}
+          name: lighthouse
 
-      - run: npm install -g netlify-cli
+      - run: |
+          SCORE=$(jq '.categories.performance.score*100|floor' report.json)
 
-      - name: Deploy Production
-        env:
-          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          echo "Score: $SCORE"
+
+          if [ "$SCORE" -lt "80" ]; then
+            echo "Performance regression"
+            exit 1
+          fi
+
+# =========================
+# BADGE GENERATOR
+# =========================
+
+  badge:
+    needs: lighthouse
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lighthouse
+
+      - run: |
+          SCORE=$(jq '.categories.performance.score*100|floor' report.json)
+
+          COLOR="red"
+
+          if [ "$SCORE" -gt "90" ]; then
+            COLOR="brightgreen"
+          elif [ "$SCORE" -gt "80" ]; then
+            COLOR="green"
+          elif [ "$SCORE" -gt "70" ]; then
+            COLOR="yellow"
+          fi
+
+          echo "https://img.shields.io/badge/Lighthouse-$SCORE-$COLOR" > badge.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-badge
+          path: badge.txt
+
+# =========================
+# PR COMMENT
+# =========================
+
+  pr-comment:
+    if: github.event_name == 'pull_request'
+    needs: [netlify-preview, lighthouse]
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lighthouse
+
+      - id: score
         run: |
-          netlify deploy \
-            --prod \
-            --dir=${{ env.DIST_DIR }} \
-            --site=$NETLIFY_SITE_ID \
-            --auth=$NETLIFY_AUTH_TOKEN \
-            --no-build \
-            --message="CI Production Deploy"
+          SCORE=$(jq '.categories.performance.score*100|floor' report.json)
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - uses: actions/github-script@v7
+        with:
+          script: |
+
+            const score = "${{ steps.score.outputs.score }}"
+            const url = "${{ needs.netlify-preview.outputs.preview_url }}"
+
+            const body = `
+🚀 Preview Ready
+
+${url}
+
+⚡ Lighthouse Score: ${score}
+
+If performance drops below 80 the CI will fail.
+`
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            })
