@@ -16,7 +16,7 @@ on:
 jobs:
   deploy:
 
-    uses: zhjpwlj/ultimate-deploy-system/.github/workflows/super-ultra.yml@v1
+    uses: zhjpwlj/ultimate-deploy-system/.github/workflows/super-ultra.yml@v2.0.0
 
     secrets:
       NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
