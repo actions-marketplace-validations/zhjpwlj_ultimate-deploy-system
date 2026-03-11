@@ -4,6 +4,33 @@
 > **Production-grade CI/CD for static sites.**  
 > Build once. Verify performance. Deploy everywhere.
 
+# Usage #
+```
+name: Super Ultra Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+  deploy:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 🚀 Super Ultra Typescript Deploy
+        uses: zhjpwlj/ultimate-deploy-system@1.0.3
+
+```
+
+# Description #
 Super Ultra Typescript Deploy is a **high-performance GitHub Actions workflow** designed for modern static applications.  
 It builds your project once, enforces **bundle size limits**, runs **Lighthouse performance audits**, and deploys safely to **Netlify and GitHub Pages**.
 
